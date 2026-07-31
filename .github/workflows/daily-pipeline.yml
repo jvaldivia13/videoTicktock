@@ -1,0 +1,120 @@
+name: Daily TikTok Video Pipeline
+
+on:
+  schedule:
+    # Run daily at 05:30 GMT-5 (10:30 UTC)
+    - cron: '30 10 * * *'
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: 'Video topic (optional)'
+        required: false
+        type: string
+
+jobs:
+  daily-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install FFMPEG
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Create directories
+        run: |
+          mkdir -p data/{swarm-memory,videos,logs,output} tmp
+
+      - name: Configure environment
+        run: |
+          cat > .env << 'EOF'
+          OPENCLAW_GATEWAY_URL=${{ secrets.OPENCLAW_GATEWAY_URL }}
+          OPENCLAW_TOKEN=${{ secrets.OPENCLAW_TOKEN }}
+          PRIMARY_MODEL=${{ secrets.PRIMARY_MODEL }}
+          FALLBACK_MODEL=${{ secrets.FALLBACK_MODEL }}
+          TIKTOK_CLIENT_KEY=${{ secrets.TIKTOK_CLIENT_KEY }}
+          TIKTOK_CLIENT_SECRET=${{ secrets.TIKTOK_CLIENT_SECRET }}
+          TIKTOK_ACCESS_TOKEN=${{ secrets.TIKTOK_ACCESS_TOKEN }}
+          TIKTOK_REFRESH_TOKEN=${{ secrets.TIKTOK_REFRESH_TOKEN }}
+          PEXELS_API_KEY=${{ secrets.PEXELS_API_KEY }}
+          EPIDEMIC_SOUND_API_KEY=${{ secrets.EPIDEMIC_SOUND_API_KEY }}
+          VIDEO_OUTPUT_DIR=./data/videos
+          TEMP_DIR=./tmp
+          DAILY_CRON_TIME=05:30
+          POST_TIME_MORNING=06:30
+          TIMEZONE=America/Lima
+          MAX_ITERATIONS=3
+          SHARED_MEMORY_PATH=./data/swarm-memory
+          LOG_LEVEL=info
+          WEBHOOK_URL=${{ secrets.WEBHOOK_URL }}
+          EOF
+
+      - name: Run daily pipeline
+        env:
+          TOPIC: ${{ github.event.inputs.topic }}
+        run: |
+          source venv/bin/activate
+          if [ -n "$TOPIC" ]; then
+            node scripts/daily.js --once --topic "$TOPIC"
+          else
+            node scripts/daily.js --once
+          fi
+
+      - name: Upload video artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: generated-video
+          path: data/videos/*.mp4
+          retention-days: 7
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: package-json
+          path: data/output/*.json
+          retention-days: 30
+
+      - name: Notify on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": "❌ Daily TikTok pipeline failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Daily TikTok Pipeline Failed* 🚨\nRepository: ${{ github.repository }}\nRun: ${{ github.run_id }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

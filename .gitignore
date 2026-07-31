@@ -1,0 +1,34 @@
+# videoTicktock - Automated TikTok Motivational Video Pipeline
+
+# Dependencies
+node_modules/
+venv/
+.env
+
+# Build outputs
+dist/
+build/
+*.log
+
+# Data directories
+data/videos/
+data/swarm-memory/
+data/output/
+tmp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# TypeScript
+*.tsbuildinfo
