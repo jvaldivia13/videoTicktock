@@ -87,14 +87,17 @@ cp .env.example .env
 ### Ejecutar pipeline (1 iteración)
 
 ```bash
-# Solo swarm (genera paquete JSON)
+# Swarm + generación de video (sin publicar)
 npm run swarm -- --topic "disciplina matutina"
 
 # Pipeline completo: swarm + video + publish
 npm run pipeline -- --topic "disciplina matutina" --publish
 
-# Modo daily cron (para systemd/cron)
+# Ejecutar una vez (modo --once)
 npm run daily
+
+# Modo daily cron (para systemd/cron)
+npm run daily:cron
 ```
 
 ## 📁 Estructura del Proyecto
@@ -197,20 +200,23 @@ Esta memoria persiste en `data/swarm-memory/` y alimenta al **Researcher** del d
 ## 🛠️ Comandos Disponibles
 
 ```bash
-# Swarm only
+# Swarm + video (sin publicar)
 npm run swarm -- --topic "tu tema" [--iterations 3]
 
 # Video generation from package JSON
-npm run video -- --package data/output/package-latest.json
+npm run video -- --package-path data/output/package-latest.json
 
-# Publish to TikTok
-npm run publish -- --video data/videos/latest.mp4 --package data/output/package-latest.json
+# Publish an already-generated video to TikTok
+npm run publish -- --video data/videos/latest.mp4 --package-path data/output/package-latest.json
 
 # Full pipeline
 npm run pipeline -- --topic "disciplina matutina" --publish
 
-# Daily cron job
+# Daily job (una vez)
 npm run daily
+
+# Daily job (cron persistente)
+npm run daily:cron
 
 # Tests
 npm test

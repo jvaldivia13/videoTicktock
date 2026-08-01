@@ -1,16 +1,27 @@
 {
   "name": "spike-tiktok",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Automated TikTok motivational video pipeline (swarm + ffmpeg + publish)",
+  "main": "src/swarm/index.js",
+  "type": "module",
   "scripts": {
+    "swarm": "node src/swarm/index.js",
+    "pipeline": "node src/swarm/index.js --publish",
+    "video": "node src/swarm/index.js --video-only",
+    "publish": "node src/swarm/index.js --publish-only",
+    "daily": "node scripts/daily.js --once",
+    "daily:cron": "node scripts/daily.js --cron",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
-    "@claude-flow/cli": "^3.34.0"
+    "@claude-flow/cli": "^3.34.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "level": "^9.0.0",
+    "node-cron": "^3.0.3",
+    "pino": "^9.4.0"
   }
 }

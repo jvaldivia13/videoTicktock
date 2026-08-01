@@ -14,7 +14,7 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const CLI = path.join(__dirname, 'node_modules', '.bin', 'claude-flow');
+const CLI = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const TOPIC = "disciplina matutina";
 const MAX_ITERATIONS = 2;
 
@@ -25,7 +25,8 @@ console.log(`📝 Tema: ${TOPIC}\n`);
 // Helpers
 // ──────────────────────────────────────────────────────────────
 function runClaudeFlow(args, input = null) {
-  const result = spawnSync(CLI, args, {
+  const cmd = CLI === 'npx.cmd' || CLI === 'npx' ? [CLI, ...args] : [CLI, ...args];
+  const result = spawnSync(cmd[0], cmd.slice(1), {
     input: input ? JSON.stringify(input) : undefined,
     encoding: 'utf8',
     maxBuffer: 10 * 1024 * 1024,

@@ -1,5 +1,8 @@
 name: Daily TikTok Video Pipeline
 
+permissions:
+  contents: read
+
 on:
   schedule:
     # Run daily at 05:30 GMT-5 (10:30 UTC)
@@ -48,33 +51,29 @@ jobs:
         run: |
           mkdir -p data/{swarm-memory,videos,logs,output} tmp
 
-      - name: Configure environment
-        run: |
-          cat > .env << 'EOF'
-          OPENCLAW_GATEWAY_URL=${{ secrets.OPENCLAW_GATEWAY_URL }}
-          OPENCLAW_TOKEN=${{ secrets.OPENCLAW_TOKEN }}
-          PRIMARY_MODEL=${{ secrets.PRIMARY_MODEL }}
-          FALLBACK_MODEL=${{ secrets.FALLBACK_MODEL }}
-          TIKTOK_CLIENT_KEY=${{ secrets.TIKTOK_CLIENT_KEY }}
-          TIKTOK_CLIENT_SECRET=${{ secrets.TIKTOK_CLIENT_SECRET }}
-          TIKTOK_ACCESS_TOKEN=${{ secrets.TIKTOK_ACCESS_TOKEN }}
-          TIKTOK_REFRESH_TOKEN=${{ secrets.TIKTOK_REFRESH_TOKEN }}
-          PEXELS_API_KEY=${{ secrets.PEXELS_API_KEY }}
-          EPIDEMIC_SOUND_API_KEY=${{ secrets.EPIDEMIC_SOUND_API_KEY }}
-          VIDEO_OUTPUT_DIR=./data/videos
-          TEMP_DIR=./tmp
-          DAILY_CRON_TIME=05:30
-          POST_TIME_MORNING=06:30
-          TIMEZONE=America/Lima
-          MAX_ITERATIONS=3
-          SHARED_MEMORY_PATH=./data/swarm-memory
-          LOG_LEVEL=info
-          WEBHOOK_URL=${{ secrets.WEBHOOK_URL }}
-          EOF
-
       - name: Run daily pipeline
         env:
           TOPIC: ${{ github.event.inputs.topic }}
+          OPENCLAW_GATEWAY_URL: ${{ secrets.OPENCLAW_GATEWAY_URL }}
+          OPENCLAW_TOKEN: ${{ secrets.OPENCLAW_TOKEN }}
+          PRIMARY_MODEL: ${{ secrets.PRIMARY_MODEL }}
+          FALLBACK_MODEL: ${{ secrets.FALLBACK_MODEL }}
+          TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
+          TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
+          TIKTOK_ACCESS_TOKEN: ${{ secrets.TIKTOK_ACCESS_TOKEN }}
+          TIKTOK_REFRESH_TOKEN: ${{ secrets.TIKTOK_REFRESH_TOKEN }}
+          TIKTOK_PRIVACY_LEVEL: ${{ secrets.TIKTOK_PRIVACY_LEVEL }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          EPIDEMIC_SOUND_API_KEY: ${{ secrets.EPIDEMIC_SOUND_API_KEY }}
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          VIDEO_OUTPUT_DIR: ./data/videos
+          TEMP_DIR: ./tmp
+          DAILY_CRON_TIME: '05:30'
+          POST_TIME_MORNING: '06:30'
+          TIMEZONE: America/Lima
+          MAX_ITERATIONS: '3'
+          SHARED_MEMORY_PATH: ./data/swarm-memory
+          LOG_LEVEL: info
         run: |
           source venv/bin/activate
           if [ -n "$TOPIC" ]; then

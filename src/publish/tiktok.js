@@ -1,12 +1,12 @@
-import fetch from 'node-fetch';
-import { FormData } from 'formdata-node';
-import { fileTypeFromFile } from 'file-type';
+import { promises as fsp, statSync } from 'fs';
 import pino from 'pino';
 
-const logger = pino({ level: 'info' });
+const PINO_REDACT = ['*.authorization', '*.headers.authorization', '*.access_token', '*.token'];
+const MAX_ERROR_BODY = 300;
+const truncate = (str) => (str.length > MAX_ERROR_BODY ? str.slice(0, MAX_ERROR_BODY) + '…' : str);
 
 export class TikTokPublisher {
-  constructor(config, logger = pino()) {
+  constructor(config, logger = pino({ redact: PINO_REDACT })) {
     this.config = config;
     this.logger = logger;
     this.clientKey = config.get('TIKTOK_CLIENT_KEY');
@@ -14,18 +14,21 @@ export class TikTokPublisher {
     this.accessToken = config.get('TIKTOK_ACCESS_TOKEN');
     this.refreshToken = config.get('TIKTOK_REFRESH_TOKEN');
     this.baseUrl = 'https://open.tiktokapis.com/v2';
+    // TikTok's Content Posting API requires unaudited client apps to default
+    // to a private visibility and let the user choose to make it public.
+    this.privacyLevel = config.get('TIKTOK_PRIVACY_LEVEL') || 'SELF_ONLY';
   }
 
   async publish(videoPath, packageData) {
     this.logger.info({ videoPath }, 'Publishing to TikTok...');
 
     const pack = typeof packageData === 'string' ? JSON.parse(packageData) : packageData;
-    
+
     // Prepare post data
     const postData = {
       post_info: {
         title: pack.caption || '',
-        privacy_level: 'PUBLIC',
+        privacy_level: this.privacyLevel,
         disable_duet: false,
         disable_stitch: false,
         disable_comment: false,
@@ -45,7 +48,7 @@ export class TikTokPublisher {
       const initResponse = await this.apiCall('/post/publish/video/init', 'POST', postData);
       
       if (!initResponse.data?.upload_url) {
-        throw new Error('Failed to get upload URL: ' + JSON.stringify(initResponse));
+        throw new Error('Failed to get upload URL: ' + truncate(JSON.stringify(initResponse)));
       }
 
       const uploadUrl = initResponse.data.upload_url;
@@ -72,8 +75,8 @@ export class TikTokPublisher {
   }
 
   async uploadVideo(uploadUrl, videoPath) {
-    const videoBuffer = await import('fs').then(fs => fs.promises.readFile(videoPath));
-    
+    const videoBuffer = await fsp.readFile(videoPath);
+
     const response = await fetch(uploadUrl, {
       method: 'PUT',
       headers: {
@@ -84,7 +87,7 @@ export class TikTokPublisher {
     });
 
     if (!response.ok) {
-      throw new Error(`Video upload failed: ${response.status} ${await response.text()}`);
+      throw new Error(`Video upload failed: ${response.status} ${truncate(await response.text())}`);
     }
   }
 
@@ -123,7 +126,7 @@ export class TikTokPublisher {
     const data = await response.json();
     
     if (data.error?.code !== 'ok') {
-      throw new Error(`TikTok API error: ${data.error?.message || JSON.stringify(data)}`);
+      throw new Error(`TikTok API error: ${truncate(data.error?.message || JSON.stringify(data))}`);
     }
     
     return data;
@@ -136,8 +139,7 @@ export class TikTokPublisher {
 
   getFileSize(path) {
     try {
-      const stats = await import('fs').then(fs => fs.promises.stat(path));
-      return stats.size;
+      return statSync(path).size;
     } catch {
       return 0;
     }
@@ -147,11 +149,11 @@ export class TikTokPublisher {
     // For scheduled posts, use the same API but with schedule_time
     // TikTok API supports scheduled publishing
     const pack = typeof packageData === 'string' ? JSON.parse(packageData) : packageData;
-    
+
     const postData = {
       post_info: {
         title: pack.caption || '',
-        privacy_level: 'PUBLIC',
+        privacy_level: this.privacyLevel,
         schedule_time: Math.floor(new Date(scheduleTime).getTime() / 1000), // Unix timestamp
       },
       source_info: {
@@ -162,12 +164,22 @@ export class TikTokPublisher {
       },
     };
 
-    const initResponse = await this.apiCall('/post/publish/video/init', 'POST', postData);
-    const uploadUrl = initResponse.data.upload_url;
-    const publishId = initResponse.data.publish_id;
+    try {
+      const initResponse = await this.apiCall('/post/publish/video/init', 'POST', postData);
 
-    await this.uploadVideo(uploadUrl, videoPath);
-    
-    return { publish_id: publishId, scheduled: true };
+      if (!initResponse.data?.upload_url) {
+        throw new Error('Failed to get upload URL for scheduled post');
+      }
+
+      const uploadUrl = initResponse.data.upload_url;
+      const publishId = initResponse.data.publish_id;
+
+      await this.uploadVideo(uploadUrl, videoPath);
+
+      return { publish_id: publishId, scheduled: true };
+    } catch (error) {
+      this.logger.error({ err: error }, 'TikTok scheduled publish failed');
+      throw error;
+    }
   }
 }

@@ -17,10 +17,14 @@ export class HiveMind {
     await this.init();
     const key = `context:${topic}`;
     const existing = await this.getContext(topic);
+    // context.history, when provided, is already the full merged history
+    // (callers load existing history and append to it themselves) — so it
+    // replaces rather than appends onto `existing.history`, or it would
+    // duplicate every entry on each save.
     const updated = {
       ...existing,
       ...context,
-      history: [...(existing?.history || []), ...(context.history || [])].slice(-20),
+      history: (context.history || existing?.history || []).slice(-20),
       updatedAt: new Date().toISOString(),
     };
     await this.db.put(key, updated);
@@ -31,7 +35,7 @@ export class HiveMind {
     try {
       return await this.db.get(`context:${topic}`);
     } catch (e) {
-      if (e.notFound) return null;
+      if (e.code === 'LEVEL_NOT_FOUND') return null;
       throw e;
     }
   }

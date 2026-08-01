@@ -23,6 +23,7 @@ export class Config {
       'TIKTOK_CLIENT_SECRET': 'TIKTOK_CLIENT_SECRET',
       'TIKTOK_ACCESS_TOKEN': 'TIKTOK_ACCESS_TOKEN',
       'TIKTOK_REFRESH_TOKEN': 'TIKTOK_REFRESH_TOKEN',
+      'TIKTOK_PRIVACY_LEVEL': 'TIKTOK_PRIVACY_LEVEL',
       'PEXELS_API_KEY': 'PEXELS_API_KEY',
       'STORYBLOCKS_API_KEY': 'STORYBLOCKS_API_KEY',
       'EPIDEMIC_SOUND_API_KEY': 'EPIDEMIC_SOUND_API_KEY',
@@ -54,6 +55,7 @@ export class Config {
       'OPENCLAW_GATEWAY_URL': 'http://localhost:18789/v1',
       'PRIMARY_MODEL': 'nvidia/nemotron-3-ultra-550b-a55b',
       'FALLBACK_MODEL': 'deepseek/deepseek-v4-flash',
+      'TIKTOK_PRIVACY_LEVEL': 'SELF_ONLY',
       'FFMPEG_PATH': 'ffmpeg',
       'VIDEO_OUTPUT_DIR': './data/videos',
       'TEMP_DIR': './tmp',
@@ -92,6 +94,11 @@ export class Config {
   }
 
   all() {
-    return Object.fromEntries(this.values);
+    // Redact anything that looks like a credential so this can't be
+    // logged/dumped by accident.
+    const SECRET_PATTERN = /(TOKEN|SECRET|KEY)/i;
+    return Object.fromEntries(
+      [...this.values].map(([k, v]) => [k, SECRET_PATTERN.test(k) ? '[REDACTED]' : v])
+    );
   }
 }

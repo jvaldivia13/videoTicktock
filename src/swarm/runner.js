@@ -1,5 +1,12 @@
 import { EventEmitter } from 'events';
-import { HiveMind } from '../shared/memory.js';
+
+function assertSafeGatewayUrl(url) {
+  const u = new URL(url);
+  const isLoopback = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1';
+  if (u.protocol !== 'https:' && !isLoopback) {
+    throw new Error(`Refusing to send bearer token over ${u.protocol} to non-loopback host ${u.hostname}`);
+  }
+}
 
 export class SwarmRunner extends EventEmitter {
   constructor(swarmConfig, config, hiveMind, logger) {
@@ -16,7 +23,8 @@ export class SwarmRunner extends EventEmitter {
     const token = this.appConfig.get('OPENCLAW_TOKEN') || '';
     const primaryModel = this.appConfig.get('PRIMARY_MODEL') || 'nvidia/nemotron-3-ultra-550b-a55b';
     const fallbackModel = this.appConfig.get('FALLBACK_MODEL') || 'deepseek/deepseek-v4-flash';
-    
+    assertSafeGatewayUrl(baseUrl);
+
     return {
       baseUrl,
       token,
@@ -24,31 +32,51 @@ export class SwarmRunner extends EventEmitter {
       fallbackModel,
       async complete(messages, options = {}) {
         const model = options.model || primaryModel;
-        const response = await fetch(`${baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            model,
-            messages,
-            temperature: options.temperature || 0.7,
-            max_tokens: options.maxTokens || 2000,
-            stream: false,
-          }),
-        });
-        
+        const timeoutMs = options.timeoutMs || 60000;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+        let response;
+        try {
+          response = await fetch(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              model,
+              messages,
+              temperature: options.temperature || 0.7,
+              max_tokens: options.maxTokens || 2000,
+              stream: false,
+            }),
+            signal: controller.signal,
+          });
+        } catch (err) {
+          if (err.name === 'AbortError' && model !== fallbackModel) {
+            return this.complete(messages, { ...options, model: fallbackModel });
+          }
+          throw err;
+        } finally {
+          clearTimeout(timer);
+        }
+
         if (!response.ok) {
           // Try fallback
           if (model !== fallbackModel) {
+            await response.body?.cancel();
             return this.complete(messages, { ...options, model: fallbackModel });
           }
-          throw new Error(`LLM error: ${response.status} ${await response.text()}`);
+          throw new Error(`LLM error: ${response.status} ${(await response.text()).slice(0, 300)}`);
         }
-        
+
         const data = await response.json();
-        return data.choices[0].message.content;
+        const content = data.choices?.[0]?.message?.content;
+        if (content == null) {
+          throw new Error(`LLM response missing choices[0].message.content: ${JSON.stringify(data).slice(0, 300)}`);
+        }
+        return content;
       },
     };
   }
@@ -66,7 +94,7 @@ export class SwarmRunner extends EventEmitter {
     if (previousContext) {
       this.logger.info('Loaded previous hive-mind context');
       feedback = previousContext.latestFeedback;
-      history.push(...previousContext.history);
+      history.push(...(previousContext.history || []));
     }
     
     while (iteration < maxIterations) {
@@ -172,18 +200,21 @@ export class SwarmRunner extends EventEmitter {
         temperature: agent.config?.temperature || 0.7,
         maxTokens: agent.config?.maxTokens || 2000,
       });
-      
+
       // Parse JSON from response
-      const parsed = this.parseJSONResponse(response);
-      return parsed;
+      return this.parseJSONResponse(response);
     } catch (error) {
       this.logger.error({ agent: agent.id, error: error.message }, 'Agent failed');
-      // Return structured error output
-      return { error: error.message, raw: error.rawResponse || '' };
+      // Fail loudly instead of returning an {error} object that downstream
+      // stages would otherwise treat as valid agent output.
+      throw new Error(`Agent "${agent.id}" failed: ${error.message}`);
     }
   }
 
   parseJSONResponse(response) {
+    if (typeof response !== 'string') {
+      throw new Error('No valid JSON found in response (non-string response)');
+    }
     // Try to extract JSON from response
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (jsonMatch) {

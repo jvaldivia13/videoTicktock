@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { readFile, mkdir, writeFile } from 'fs/promises';
 import dotenv from 'dotenv';
 import pino from 'pino';
 
@@ -15,7 +16,14 @@ const __dirname = dirname(__filename);
 
 dotenv.config({ path: join(__dirname, '../../.env') });
 
-const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  redact: ['*.authorization', '*.headers.authorization', '*.access_token', '*.token'],
+});
+
+// Fixed key used to remember which topic the daily rotation last ran, so
+// tomorrow's getNextTopic() can look up that topic's learned patterns.
+const ROTATION_KEY = '__daily_rotation__';
 
 class DailyPipeline {
   constructor() {
@@ -29,11 +37,9 @@ class DailyPipeline {
 
   async init() {
     const swarmConfig = JSON.parse(
-      await import('fs').then(fs => fs.promises.readFile(
-        join(__dirname, '../swarm/config.json'), 'utf-8'
-      ))
+      await readFile(join(__dirname, '../swarm/config.json'), 'utf-8')
     );
-    
+
     this.runner = new SwarmRunner(swarmConfig, this.config, this.hiveMind, logger);
     this.videoGen = new VideoGenerator(this.config, logger);
     this.publisher = new TikTokPublisher(this.config, logger);
@@ -49,47 +55,48 @@ class DailyPipeline {
 
     this.isRunning = true;
     const startTime = Date.now();
-    
+    let finalTopic = topic;
+
     try {
       // Use provided topic or get from hive-mind suggestions
-      const finalTopic = topic || await this.getNextTopic();
+      finalTopic = topic || await this.getNextTopic();
       logger.info({ topic: finalTopic }, 'Starting daily pipeline');
-      
+      await this.hiveMind.saveContext(ROTATION_KEY, { lastTopic: finalTopic });
+
       // Run swarm
       const swarmResult = await this.runner.run({
         topic: finalTopic,
         maxIterations: this.config.getNumber('MAX_ITERATIONS'),
       });
-      
+
+      const packageData = { visual_plan: swarmResult.visualPlan, package: swarmResult.package };
+
       // Save package
       const outputDir = join(__dirname, '../../data/output');
-      await import('fs').then(fs => fs.promises.mkdir(outputDir, { recursive: true }));
-      await import('fs').then(fs => fs.promises.writeFile(
+      await mkdir(outputDir, { recursive: true });
+      await writeFile(
         join(outputDir, 'package-latest.json'),
-        JSON.stringify(swarmResult.package, null, 2)
-      ));
-      
+        JSON.stringify(packageData, null, 2)
+      );
+
       // Generate video
-      const videoPath = await this.videoGen.generate({
-        visual_plan: swarmResult.visualPlan,
-        package: swarmResult.package,
-      });
-      
+      const videoPath = await this.videoGen.generate(packageData);
+
       // Schedule post for optimal time
       const pack = typeof swarmResult.package === 'string' ? JSON.parse(swarmResult.package) : swarmResult.package;
       const postTime = this.getNextPostTime(pack.post_time);
-      
+
       await this.publisher.schedulePost(videoPath, swarmResult.package, postTime);
-      
+
       // Log metrics
       const duration = Date.now() - startTime;
-      logger.info({ 
-        topic: finalTopic, 
+      logger.info({
+        topic: finalTopic,
         duration: `${duration}ms`,
         videoPath,
         scheduledFor: postTime,
       }, 'Daily pipeline completed');
-      
+
       // Notify webhook if configured
       await this.notifyWebhook({
         topic: finalTopic,
@@ -97,22 +104,26 @@ class DailyPipeline {
         scheduledFor: postTime,
         duration,
       });
-      
+
     } catch (error) {
       logger.error({ err: error }, 'Daily pipeline failed');
-      await this.notifyWebhook({ error: error.message, topic });
+      await this.notifyWebhook({ error: error.message, topic: finalTopic });
     } finally {
       this.isRunning = false;
+      await this.hiveMind.close();
     }
   }
 
   async getNextTopic() {
-    // Get learned patterns from hive-mind
-    const patterns = await this.hiveMind.getLearnedPatterns('daily');
+    // Get learned patterns from whichever topic the rotation last ran
+    const rotation = await this.hiveMind.getContext(ROTATION_KEY);
+    const patterns = rotation?.lastTopic
+      ? await this.hiveMind.getLearnedPatterns(rotation.lastTopic)
+      : null;
     if (patterns?.next_topic_suggestions?.length) {
       return patterns.next_topic_suggestions[0];
     }
-    
+
     // Default topics rotation
     const topics = [
       'disciplina matutina',
@@ -161,19 +172,17 @@ class DailyPipeline {
 
   startCron() {
     const cronTime = this.config.get('DAILY_CRON_TIME') || '05:30';
-    const [minute, hour] = cronTime.split(':').map(Number);
+    const [hour, minute] = cronTime.split(':').map(Number); // DAILY_CRON_TIME is HH:MM
     const cronExpr = `${minute} ${hour} * * *`;
-    
+
     logger.info({ cronExpr, timezone: this.config.get('TIMEZONE') }, 'Starting daily cron');
-    
+
+    // node-cron's internal timer keeps the event loop alive on its own.
     cron.schedule(cronExpr, () => {
       this.runDaily();
     }, {
       timezone: this.config.get('TIMEZONE') || 'America/Lima',
     });
-    
-    // Keep process alive
-    setInterval(() => {}, 1000);
   }
 }
 
@@ -193,8 +202,10 @@ async function main() {
   
   if (args.includes('--cron')) {
     pipeline.startCron();
+    return;
   }
-  
+
+
   // Default: run once with default topic
   await pipeline.runDaily();
 }
